@@ -1,0 +1,275 @@
+---
+title: DATA 607 - Week 10 Assignment
+author: Peter Phung
+output: html_document
+---
+
+### Introduction
+
+In this report, a sentiment analysis is carried out on the first 7 Harry Potter novels using 3 main sentiment lexicons ("AFINN", "Bing", "NRC"), and one additional sentiment lexicon ("Loughran"). After importing, tidying, and transforming the data from all seven novels into a dataframe, the rest of code that is used to perform the analysis in this report is an extension from Chapter 2 of *Text Mining with R*.
+
+### Preparation of the Data
+In Chapter 2 of *Text Mining with R*, the majority of the analysis is done on the `tidy_books` dataframe, which contains 4 columns.
+
+- `book`: The title of the book. The dataframe comtains multiple books which is why this column is necessary.
+
+- `word`: The word from the book.
+
+- `linenumber`: The line number for where the word can be found in the book.
+
+- `chapter`: The chapter for the book where the word can be found in.
+
+The `harrypotter` library contains the text data for each of the first seven novels in the Harry Potter series. The raw text data for all seven novels must be transformed and tidied in a dataframe with the 4 columns listed above.
+
+#### Importing of the Libraries
+```{r library importing, message = FALSE}
+
+library(harrypotter)
+library(tidytext)
+library(tidyverse)
+library(wordcloud)
+library(reshape2)
+library(knitr)
+
+```
+
+#### Importing of the Data
+
+`hp_book_list` contains the raw text data for all seven Harry Potter novels stored in a list. The names of each of the books are stored in the `hp_book_list_names` character vector. The `hp_book_df` is declared as an empty dataframe, because a for loop is used in order to extract the `book`, `word`, `linenumber` and `chapter` data from the raw text of each novel.
+
+```{r importing data}
+
+hp_book_list <- list(
+  philosophers_stone = philosophers_stone,
+  chamber_of_secrets = chamber_of_secrets,
+  prisoner_of_azkaban = prisoner_of_azkaban,
+  goblet_of_fire = goblet_of_fire,
+  order_of_the_phoenix = order_of_the_phoenix,
+  half_blood_prince = half_blood_prince,
+  deathly_hallows = deathly_hallows
+)
+
+hp_book_list_names <- names(hp_book_list)
+
+hp_book_df <- data.frame()
+
+```
+
+In the for loop, `hp_book_list_names` is iterated through, which contains the names for each of the seven novels. For each iteration, a `book_df` dataframe is created. The following steps are done in order to produce `book_df`
+
+1. A tibble is created, using the `text` function on `book_name` in `hp_book_list`. For example, if `philosophers_stone` is `book_name`, then the raw text data for `philosophers_stone` stored in `hp_book_list` is converted to a tibble.
+
+2. A `chapter` column is created using the `mutate` function.
+
+3. `unnest_tokens` is used in order to break the text down into individual sentences, The reason why token was set to "regex" was because of the use of "Mr." and "Mrs." prevalent in the novels. Since the `sentence` token breaks texts down by periods, words like "Mr." or "Mrs." became whole sentences, which is not suitable for analysis. Therefore, a custom regex expression was created which accounts for these words. This custom regex expression is stored as `regex` and is used in the `pattern` parameter in the `unnest_tokens` function.
+
+4. Some of the sentences contain nothing but whitespace. Therefore, the `filter` function was used to parse out these sentences.
+
+5. The `linenumber` and `bookname` columns are created. Since there is no inherent line number in the raw text, each sentence was treated as a seperate line in this analysis.
+
+`book_df` is placed under `hp_book_df` for each iteration using the `bind_rows` function. After the for loop, to get the `words` column, the `unnest_tokens` function was used to unnest each sentence in the `sentences` column. The table below shows the first five rows of `hp_book_df`, which contains the `words`, `chapters`, and `linenumbers` by `book` for all seven novels.
+
+
+```{r for loop}
+
+titles =  c("Mr", "Dr", "Mrs", "Ms", "Sr", "Jr")
+regex = paste0("(?<!(", paste(titles, collapse = "|"), "))\\.")
+
+for (book_name in hp_book_list_names){
+  
+  book_df <- tibble(text = hp_book_list[[book_name]]) %>%
+    mutate(chapter = row_number()) %>%
+    unnest_tokens(sentences, text, token = "regex",
+                  pattern = regex) %>%
+    filter(str_detect(sentences, "[^\\s]")) %>%
+    mutate(linenumber = row_number(),
+           book = book_name)
+  
+  hp_book_df <- bind_rows(hp_book_df,
+                          book_df)
+}
+
+hp_book_df <- hp_book_df %>%
+  unnest_tokens(word, sentences)
+
+knitr::kable(hp_book_df[1:5,])
+
+```
+
+### Plotting Sentiment Scores across the Plot Trajectory of each Novel
+
+In Chapter 2 of *Text Mining with R*, the `bing` sentiment lexicon was used to generate plots of the sentiment scores for each novel. Here, the `loughran` sentiment lexicon is used to generate these plots.
+
+```{r plotting sentiment scores, message = FALSE}
+
+hp_books_sentiment <- hp_book_df %>%
+  inner_join(get_sentiments("loughran")) %>%
+  count(book, sentiment, index = linenumber %/% 80) %>%
+  filter(sentiment %in% c("positive", "negative")) %>%
+  pivot_wider(names_from = sentiment, values_from = n, values_fill = 0) %>%
+  mutate(sentiment = positive - negative)
+
+ggplot(hp_books_sentiment, aes(x = index, y = sentiment, fill = book)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~book, ncol = 2, scales = "free_x")
+
+```
+
+The plots above show the changing sentiment for each of the novels with respect to the index. None of the novels have a high amount of positive sentiment to them when using the `loughran` sentiment lexicon.
+
+### Comparing Four Sentiment Dictionaries
+
+Bar graphs containing the sentiment scores for the AFINN, Bing, NRC, and Loughran sentiment lexicons across the index of the first Harry Potter novel are generated using the code block below.
+
+
+```{r comparing four sentiment dictionaries, message = FALSE}
+
+philosophersstone <- hp_book_df %>%
+  filter(book == "philosophers_stone")
+
+afinn <- philosophersstone %>%
+  inner_join(get_sentiments("afinn")) %>%
+  group_by(index = linenumber %/% 80) %>%
+  summarise(sentiment = sum(value)) %>%
+  mutate(method = "AFINN")
+
+bing_nrc_loughran <- bind_rows(
+  philosophersstone %>%
+    inner_join(get_sentiments("bing")) %>%
+    mutate(method = "Bing et al."),
+  philosophersstone %>%
+    inner_join(get_sentiments("nrc")) %>%
+    filter(sentiment %in% c("positive", "negative")) %>%
+    mutate(method = "NRC"),
+  philosophersstone %>%
+    inner_join(get_sentiments("loughran")) %>%
+    filter(sentiment %in% c("positive", "negative")) %>%
+    mutate(method = "Loughran")
+) %>%
+  count(method, index = linenumber %/% 80, sentiment) %>%
+  pivot_wider(names_from = sentiment,
+              values_from = n,
+              values_fill = 0) %>% 
+  mutate(sentiment = positive - negative)
+
+bind_rows(afinn,
+          bing_nrc_loughran) %>%
+  ggplot(aes(x = index, y = sentiment, fill = method)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~method, ncol = 1, scales = "free_y")
+
+
+```
+
+Note that the sentiment scores for the AFINN and Bing sentiment lexicons vary in comparison to the Loughran and NRC sentiment lexicons, where the majority of the sentiment scores are negative. 
+
+```{r comparison of sentiments}
+
+get_sentiments("bing") %>%
+  count(sentiment)
+
+get_sentiments("loughran") %>%
+  filter(sentiment %in% c("positive", "negative")) %>%
+  count(sentiment)
+
+get_sentiments("nrc") %>%
+  filter(sentiment %in% c("positive", "negative")) %>%
+  count(sentiment)
+
+```
+
+
+When comparing ratio of positive to negative words between the Bing and Loughran lexicons, The Bing lexicon has a higher ratio, which is reflected in the bar graph. However, when comparing the ratio of positive to negative words between the Bing and NRC lexicons, the NRC lexicon has a higher ratio, despite the fact that the NRC bar graph has more negative scores across the index.
+
+### Most Common Positive and Negative Words
+
+Using the Loughran sentiment lexicon, two bar plots were generated which show the top ten words throughout all 7 novels that contribute the most to the sentiment. The bar plots are shown below.
+
+
+```{r most common positive and negative words}
+
+loughran_word_counts <- hp_book_df %>%
+  inner_join(get_sentiments("loughran")) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  ungroup()
+
+loughran_word_counts %>%
+  filter(sentiment %in% c("positive", "negative")) %>%
+  group_by(sentiment) %>%
+  slice_max(n, n = 10) %>% 
+  ungroup() %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(n, word, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free_y") +
+  labs(x = "Contribution to sentiment",
+       y = NULL)
+
+```
+
+There does not seem to be any anomalous words between the negative and positive sentiments shown on the graph above. Therefore, no `custom_stop_words` dataframe was created.
+
+### Wordclouds
+When using the `wordcloud` package, the most common words in all seven Harry Potter novels is shown in a word cloud graphic below. The size of the word coresponds to the number of times the word appears across all seven Harry Potter novels.
+
+```{r wordcloud 1, message = FALSE}
+
+hp_book_df %>%
+  anti_join(stop_words) %>%
+  count(word) %>%
+  with(wordcloud(word, n, max.words = 100))
+
+```
+
+The most common positive and negative words were grouped seperately using the `acast` function from the `reshape2` package. A comparison wordcloud, generated using the `comparison.cloud` function, divides the wordcloud by color, with each color corresonding to a unique sentiment, which in this case is either `positive` or `negative`. The size of the word corresponds to the number of times the word appears for its respective sentiment.
+
+```{r wordcloud 2, message = FALSE}
+
+hp_book_df %>%
+  inner_join(get_sentiments("loughran")) %>%
+  filter(sentiment %in% c("positive", "negative")) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  acast(word ~ sentiment, value.var = "n", fill = 0) %>%
+  comparison.cloud(colors = c("gray20", "gray80"),
+                   max.words = 100)
+
+```
+
+
+#### Special Note
+
+In Chapter 2 of *Text Mining with *, tokenizing text into sentences is shown in Section 2.6. However, in the analysis in this report, this procedure was performed when `book_df` was created. Therefore, this code is not included in this analysis. Also, when each of the Harry Potter objects were transformed into a tibble, each row of the tibble corresponded to each chapter in an object. Therefore, the code in Section 2.6 which shows how to split text of novels into a dataframe by chapter is not included in this analysis, since the `mutate` function was used previous to get the chapter numbers.
+
+### Which Chapter has the Highest Proportion of Negative Words
+
+The code chunk below generates a tibble, which shows the chapter containing the highest ratio of negative words for each of the novels, with the negative sentiments from the Loughran sentiment lexicon used to generate the ratios.
+
+```{r highest proportion negative words, message = FALSE}
+
+loughrannegative <- get_sentiments("loughran") %>% 
+  filter(sentiment == "negative")
+
+wordcounts <- hp_book_df %>%
+  group_by(book, chapter) %>%
+  summarize(words = n())
+
+hp_book_df %>%
+  semi_join(loughrannegative) %>%
+  group_by(book, chapter) %>%
+  summarize(negativewords = n()) %>%
+  left_join(wordcounts, by = c("book", "chapter")) %>%
+  mutate(ratio = negativewords/words) %>%
+  filter(chapter != 0) %>%
+  slice_max(ratio, n = 1) %>% 
+  ungroup()
+
+```
+
+### Conclusion
+
+This analysis shows several methodologies which can be used in order to carry out sentiment analysis for a series of texts. The plots that were generated in this analysis show how different sentiments convey different conclusions. The proportion of negative words for each of the chapters also highlights how individual chapters can be described by how "positive" or "negative" they are based on their words. A future analysis could involve an assessment of the contribution to sentiments using other lexicons besides the Loughran lexicon.
+
+### References
+Bradley Boehmke (n.d.). Bradleyboehmke/harrypotter: An R package for the harry potter book series. GitHub. Retrieved October 31, 2021, from https://github.com/bradleyboehmke/harrypotter.
+
+Robinson, J. S. and D. (n.d.). 2 sentiment analysis with Tidy Data: Text mining with R. 2 Sentiment analysis with tidy data | Text Mining with R. Retrieved October 31, 2021, from https://www.tidytextmining.com/sentiment.html. 
